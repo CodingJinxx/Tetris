@@ -1,0 +1,104 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          cmake \
+          libasound2-dev \
+          libx11-dev \
+          libxrandr-dev \
+          libxi-dev \
+          libgl1-mesa-dev \
+          libglu1-mesa-dev \
+          libxcursor-dev \
+          libxinerama-dev
+    
+    - name: Build and install raylib (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        git clone --depth 1 --branch 5.5 https://github.com/raysan5/raylib.git /tmp/raylib
+        cd /tmp/raylib/src
+        make PLATFORM=PLATFORM_DESKTOP
+        sudo make install PLATFORM=PLATFORM_DESKTOP
+        # Create pkg-config file for raylib
+        sudo mkdir -p /usr/local/lib/pkgconfig
+        sudo tee /usr/local/lib/pkgconfig/raylib.pc > /dev/null <<EOF
+        prefix=/usr/local
+        exec_prefix=\${prefix}
+        libdir=\${exec_prefix}/lib
+        includedir=\${prefix}/include
+        
+        Name: raylib
+        Description: A simple and easy-to-use library to enjoy videogames programming
+        URL: https://github.com/raysan5/raylib
+        Version: 5.5
+        Libs: -L\${libdir} -lraylib -lGL -lpthread -ldl -lrt -lX11 -lm
+        Cflags: -I\${includedir}
+        EOF
+        sudo ldconfig
+    
+    - name: Install raylib (macOS)
+      if: matrix.os == 'macos-latest'
+      run: brew install raylib
+    
+    - name: Build
+      run: make
+      env:
+        PKG_CONFIG_PATH: /usr/local/lib/pkgconfig:${{ env.PKG_CONFIG_PATH }}
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: game-${{ matrix.os }}
+        path: game
+
+  build-web:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v12
+      with:
+        version: 3.1.45
+    
+    - name: Build for Web
+      run: make web
+    
+    - name: Upload web build
+      uses: actions/upload-artifact@v4
+      with:
+        name: game-web
+        path: dist/
+    
+    - name: Deploy to GitHub Pages
+      if: github.ref == 'refs/heads/main'
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./dist
+        publish_branch: gh-pages
