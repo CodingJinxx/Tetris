@@ -1,10 +1,17 @@
 # Project
 NAME    := game
-SRC     := main.c
+SRC     := main.c font_cache.c
 CC      := gcc
 
 # Detect OS
 UNAME_S := $(shell uname -s)
+
+# Choose MD5 command based on OS
+ifeq ($(UNAME_S),Darwin)
+    MD5 := md5
+else
+    MD5 := md5sum
+endif
 
 # Flags
 CFLAGS  := -std=c11 -Wall -Wextra -O2
@@ -32,6 +39,9 @@ clean:
 
 run: $(NAME)
 	./$(NAME)
+
+run-cage: $(NAME)
+	cage ./$(NAME)
 
 # WebAssembly target
 RAYLIB_WEB := raylib-web
@@ -116,74 +126,11 @@ watch:
 	trap cleanup_watch EXIT INT TERM; \
 	if command -v fswatch >/dev/null 2>&1; then \
 		echo "Using fswatch for file monitoring"; \
-		fswatch -o $(SRC) resources/ shell.html 2>/dev/null > /tmp/game_watch_fifo & \
-		FSWATCH_PID=$$!; \
-		while read -r line; do \
-			echo "🔨 Change detected, rebuilding..."; \
-			if [ -f /tmp/game_game.pid ]; then \
-				OLD_PID=$$(cat /tmp/game_game.pid 2>/dev/null); \
-			else \
-				OLD_PID=""; \
-			fi; \
-			if [ -n "$$OLD_PID" ]; then \
-				if ps -p $$OLD_PID > /dev/null 2>&1; then \
-					echo "Killing old game (PID: $$OLD_PID)"; \
-					kill -TERM $$OLD_PID 2>/dev/null || true; \
-					sleep 0.3; \
-					if ps -p $$OLD_PID > /dev/null 2>&1; then \
-						kill -KILL $$OLD_PID 2>/dev/null || true; \
-						sleep 0.2; \
-					fi; \
-				fi; \
-			fi; \
-			if $(MAKE) $(NAME); then \
-				./$(NAME) & \
-				NEW_PID=$$!; \
-				echo $$NEW_PID > /tmp/game_game.pid; \
-				echo "✅ Game restarted (PID: $$NEW_PID)"; \
-			else \
-				echo "❌ Build failed"; \
-			fi; \
-			echo ""; \
-		done < /tmp/game_watch_fifo; \
-	elif command -v inotifywait >/dev/null 2>&1; then \
-		echo "Using inotifywait for file monitoring"; \
-		while true; do \
-			inotifywait -qre modify,create,delete $(SRC) resources/ shell.html 2>/dev/null; \
-			echo "🔨 Change detected, rebuilding..."; \
-			if [ -f /tmp/game_game.pid ]; then \
-				OLD_PID=$$(cat /tmp/game_game.pid 2>/dev/null); \
-			else \
-				OLD_PID=""; \
-			fi; \
-			if [ -n "$$OLD_PID" ]; then \
-				if ps -p $$OLD_PID > /dev/null 2>&1; then \
-					echo "Killing old game (PID: $$OLD_PID)"; \
-					kill -TERM $$OLD_PID 2>/dev/null || true; \
-					sleep 0.3; \
-					if ps -p $$OLD_PID > /dev/null 2>&1; then \
-						kill -KILL $$OLD_PID 2>/dev/null || true; \
-						sleep 0.2; \
-					fi; \
-				fi; \
-			fi; \
-			if $(MAKE) $(NAME); then \
-				./$(NAME) & \
-				NEW_PID=$$!; \
-				echo $$NEW_PID > /tmp/game_game.pid; \
-				echo "✅ Game restarted (PID: $$NEW_PID)"; \
-			else \
-				echo "❌ Build failed"; \
-			fi; \
-			echo ""; \
-		done; \
-	else \
-		echo "Using polling (install fswatch for better performance: brew install fswatch)"; \
-		LAST_HASH=$$(find $(SRC) resources/ shell.html -type f -exec md5 {} \; 2>/dev/null | md5 | cut -d' ' -f1); \
-		while true; do \
-			sleep 1; \
-			CURRENT_HASH=$$(find $(SRC) resources/ shell.html -type f -exec md5 {} \; 2>/dev/null | md5 | cut -d' ' -f1); \
-			if [ "$$CURRENT_HASH" != "$$LAST_HASH" ]; then \
+		LAST_BUILD=0; \
+		fswatch -o $(SRC) resources/ shell.html 2>/dev/null | while read -r line; do \
+			NOW=$$(date +%s); \
+			if [ $$((NOW - LAST_BUILD)) -gt 1 ]; then \
+				LAST_BUILD=$$NOW; \
 				echo "🔨 Change detected, rebuilding..."; \
 				if [ -f /tmp/game_game.pid ]; then \
 					OLD_PID=$$(cat /tmp/game_game.pid 2>/dev/null); \
@@ -198,6 +145,76 @@ watch:
 						if ps -p $$OLD_PID > /dev/null 2>&1; then \
 							kill -KILL $$OLD_PID 2>/dev/null || true; \
 							sleep 0.2; \
+						fi; \
+					fi; \
+				fi; \
+				if $(MAKE) $(NAME); then \
+					./$(NAME) & \
+					NEW_PID=$$!; \
+					echo $$NEW_PID > /tmp/game_game.pid; \
+					echo "✅ Game restarted (PID: $$NEW_PID)"; \
+				else \
+					echo "❌ Build failed"; \
+				fi; \
+				echo ""; \
+			fi; \
+		done; \
+	elif command -v inotifywait >/dev/null 2>&1; then \
+		echo "Using inotifywait for file monitoring"; \
+		LAST_BUILD=0; \
+		inotifywait -qrme modify,create,delete $(SRC) resources/ shell.html 2>/dev/null | while read -r; do \
+			NOW=$$(date +%s); \
+			if [ $$((NOW - LAST_BUILD)) -gt 1 ]; then \
+				LAST_BUILD=$$NOW; \
+				echo "🔨 Change detected, rebuilding..."; \
+				if [ -f /tmp/game_game.pid ]; then \
+					OLD_PID=$$(cat /tmp/game_game.pid 2>/dev/null); \
+				else \
+					OLD_PID=""; \
+				fi; \
+				if [ -n "$$OLD_PID" ]; then \
+					if ps -p $$OLD_PID > /dev/null 2>&1; then \
+						echo "Killing old game (PID: $$OLD_PID)"; \
+						kill -TERM $$OLD_PID 2>/dev/null || true; \
+						sleep 0.3; \
+						if ps -p $$OLD_PID > /dev/null 2>&1; then \
+							kill -KILL $$OLD_PID 2>/dev/null || true; \
+							sleep 0.2; \
+						fi; \
+					fi; \
+				fi; \
+				if $(MAKE) $(NAME); then \
+					./$(NAME) & \
+					NEW_PID=$$!; \
+					echo $$NEW_PID > /tmp/game_game.pid; \
+					echo "✅ Game restarted (PID: $$NEW_PID)"; \
+				else \
+					echo "❌ Build failed"; \
+				fi; \
+				echo ""; \
+			fi; \
+		done; \
+	else \
+		echo "Using polling (install fswatch for better performance: brew install fswatch)"; \
+		LAST_HASH=$$(find $(SRC) resources/ shell.html -type f -exec $(MD5) {} \; 2>/dev/null | $(MD5) | cut -d' ' -f1); \
+		while true; do \
+			sleep 5; \
+			CURRENT_HASH=$$(find $(SRC) resources/ shell.html -type f -exec $(MD5) {} \; 2>/dev/null | $(MD5) | cut -d' ' -f1); \
+			if [ "$$CURRENT_HASH" != "$$LAST_HASH" ]; then \
+				echo "🔨 Change detected, rebuilding..."; \
+				if [ -f /tmp/game_game.pid ]; then \
+					OLD_PID=$$(cat /tmp/game_game.pid 2>/dev/null); \
+				else \
+					OLD_PID=""; \
+				fi; \
+				if [ -n "$$OLD_PID" ]; then \
+					if ps -p $$OLD_PID > /dev/null 2>&1; then \
+						echo "Killing old game (PID: $$OLD_PID)"; \
+						kill -TERM $$OLD_PID 2>/dev/null || true; \
+						sleep 1.0; \
+						if ps -p $$OLD_PID > /dev/null 2>&1; then \
+							kill -KILL $$OLD_PID 2>/dev/null || true; \
+							sleep 1.0; \
 						fi; \
 					fi; \
 				fi; \
@@ -231,25 +248,33 @@ watch-web:
 	trap "kill $$SERVER_PID 2>/dev/null; echo 'Server stopped'" EXIT; \
 	if command -v fswatch >/dev/null 2>&1; then \
 		echo "Using fswatch for file monitoring"; \
+		LAST_BUILD=0; \
 		fswatch -o $(SRC) resources/ shell.html 2>/dev/null | while read num; do \
-			echo ""; \
-			echo "🔨 Change detected, rebuilding web..."; \
-			$(MAKE) web && echo "✅ Rebuild complete! Refresh your browser."; \
-		done; \
+			NOW=$$(date +%s); \
+			if [ $$((NOW - LAST_BUILD)) -gt 1 ]; then \
+				LAST_BUILD=$$NOW; \
+				echo ""; \
+				echo "🔨 Change detected, rebuilding web..."; \
+				$(MAKE) web && echo "✅ Rebuild complete! Refresh your browser."; \
+			fi; \
 	elif command -v inotifywait >/dev/null 2>&1; then \
 		echo "Using inotifywait for file monitoring"; \
-		while true; do \
-			inotifywait -qre modify,create,delete $(SRC) resources/ shell.html 2>/dev/null; \
-			echo ""; \
-			echo "🔨 Change detected, rebuilding web..."; \
-			$(MAKE) web && echo "✅ Rebuild complete! Refresh your browser."; \
+		LAST_BUILD=0; \
+		inotifywait -qrme modify,create,delete $(SRC) resources/ shell.html 2>/dev/null | while read -r; do \
+			NOW=$$(date +%s); \
+			if [ $$((NOW - LAST_BUILD)) -gt 1 ]; then \
+				LAST_BUILD=$$NOW; \
+				echo ""; \
+				echo "🔨 Change detected, rebuilding web..."; \
+				$(MAKE) web && echo "✅ Rebuild complete! Refresh your browser."; \
+			fi; \
 		done; \
 	else \
 		echo "Using polling (install fswatch for better performance: brew install fswatch)"; \
-		LAST_HASH=$$(find $(SRC) resources/ shell.html -type f -exec md5 {} \; 2>/dev/null | md5 | cut -d' ' -f1); \
+		LAST_HASH=$$(find $(SRC) resources/ shell.html -type f -exec $(MD5) {} \; 2>/dev/null | $(MD5) | cut -d' ' -f1); \
 		while true; do \
 			sleep 2; \
-			CURRENT_HASH=$$(find $(SRC) resources/ shell.html -type f -exec md5 {} \; 2>/dev/null | md5 | cut -d' ' -f1); \
+			CURRENT_HASH=$$(find $(SRC) resources/ shell.html -type f -exec $(MD5) {} \; 2>/dev/null | $(MD5) | cut -d' ' -f1); \
 			if [ "$$CURRENT_HASH" != "$$LAST_HASH" ]; then \
 				echo ""; \
 				echo "🔨 Change detected, rebuilding web..."; \
@@ -259,4 +284,6 @@ watch-web:
 		done; \
 	fi
 
-.PHONY: all clean run web serve watch watch-web
+.PHONY: all clean run run-cage web serve watch watch-web build
+
+build: $(NAME)
